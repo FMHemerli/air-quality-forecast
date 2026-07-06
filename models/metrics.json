@@ -1,0 +1,80 @@
+{
+  "1h": {
+    "horizon_h": 1,
+    "spike_threshold_ugm3": 11.0,
+    "best_params": {
+      "max_depth": 9,
+      "min_child_weight": 1.019853975854779,
+      "gamma": 0.014542766591581126,
+      "subsample": 0.7072958782974688,
+      "colsample_bytree": 0.7019084384466702,
+      "learning_rate": 0.019781732876533495,
+      "reg_alpha": 4.382595039190444,
+      "reg_lambda": 1.2557898232645948
+    },
+    "n_boost_rounds": 878,
+    "model": {
+      "mae": 3.1090354215129627,
+      "rmse": 5.2933495325790885
+    },
+    "baseline_persistence": {
+      "mae": 2.5520836211263065,
+      "rmse": 4.450671134342539
+    },
+    "n_train": 85581,
+    "n_val": 21215,
+    "n_test": 21717
+  },
+  "4h": {
+    "horizon_h": 4,
+    "spike_threshold_ugm3": 11.0,
+    "best_params": {
+      "max_depth": 9,
+      "min_child_weight": 0.27090840066347543,
+      "gamma": 0.16733003777029487,
+      "subsample": 0.5797654491534234,
+      "colsample_bytree": 0.8459602018424531,
+      "learning_rate": 0.017266304029517694,
+      "reg_alpha": 3.4651445886657597,
+      "reg_lambda": 0.6231321886666507
+    },
+    "n_boost_rounds": 816,
+    "model": {
+      "mae": 3.759148629529521,
+      "rmse": 6.262111229384568
+    },
+    "baseline_persistence": {
+      "mae": 4.219478421417032,
+      "rmse": 7.269112484162579
+    },
+    "n_train": 85475,
+    "n_val": 21182,
+    "n_test": 21665
+  },
+  "12h": {
+    "horizon_h": 12,
+    "spike_threshold_ugm3": 11.0,
+    "best_params": {
+      "max_depth": 10,
+      "min_child_weight": 1.0413310870150545,
+      "gamma": 0.2586698594163583,
+      "subsample": 0.8107759531045939,
+      "colsample_bytree": 0.6012669661589645,
+      "learning_rate": 0.008353602676314598,
+      "reg_alpha": 1.5171255884631778,
+      "reg_lambda": 0.08374245383709869
+    },
+    "n_boost_rounds": 1406,
+    "model": {
+      "mae": 4.213309183474349,
+      "rmse": 6.901598189108014
+    },
+    "baseline_persistence": {
+      "mae": 5.480178720251875,
+      "rmse": 9.089714720260067
+    },
+    "n_train": 85358,
+    "n_val": 21140,
+    "n_test": 21598
+  }
+}

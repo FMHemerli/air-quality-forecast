@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+data/raw/
+data/processed/
+models/*.json
+!models/metrics.json
+models/*.ubj
+models/*.pkl
+.ipynb_checkpoints/
+.DS_Store
+.idea/
