@@ -1,5 +1,13 @@
 # PM2.5 Forecast — California EPA AQS
 
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://fmhemerli-air-quality-forecast.streamlit.app/)
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?logo=scikitlearn&logoColor=white)
+![XGBoost](https://img.shields.io/badge/XGBoost-337AB7)
+![Optuna](https://img.shields.io/badge/Optuna-blueviolet)
+![Plotly](https://img.shields.io/badge/Plotly-3F4F75?logo=plotly&logoColor=white)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
 Short-horizon (1h / 4h / 12h) PM2.5 particulate-matter forecasting for five California air
 quality monitoring sites, built as an independent portfolio project on public data.
 
