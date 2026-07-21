@@ -6,6 +6,8 @@ quality monitoring sites, built as an independent portfolio project on public da
 Built entirely from scratch on public EPA data — no code, data, configuration, or
 methodology from any client engagement. See [Data & provenance](#data--provenance).
 
+**Live demo**: https://fmhemerli-air-quality-forecast.streamlit.app/
+
 ## Problem
 
 Predict PM2.5 concentration (µg/m³) 1, 4, and 12 hours ahead at five California EPA AQS
