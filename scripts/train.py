@@ -120,7 +120,7 @@ def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trial
     persistence = baseline_metrics(y_test, cur_test)
 
     config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    final_model.save_model(config.MODELS_DIR / f"model_{horizon}h.json")
+    final_model.save_model(config.MODELS_DIR / f"model_{horizon}h.ubj")
 
     print(
         f"[horizon {horizon}h] model RMSE={model_metrics['rmse']:.3f} MAE={model_metrics['mae']:.3f} "

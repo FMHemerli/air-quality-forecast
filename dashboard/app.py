@@ -33,7 +33,7 @@ def load_featurized() -> pd.DataFrame:
 @st.cache_resource
 def load_model(horizon: int) -> xgb.XGBRegressor:
     model = xgb.XGBRegressor(tree_method="hist", enable_categorical=True)
-    model.load_model(config.MODELS_DIR / f"model_{horizon}h.json")
+    model.load_model(config.MODELS_DIR / f"model_{horizon}h.ubj")
     return model
 
 
