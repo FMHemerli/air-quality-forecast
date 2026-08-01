@@ -64,7 +64,13 @@ def select_pareto_trial(study: optuna.Study) -> optuna.trial.FrozenTrial:
     return max(eligible, key=lambda t: (t.values[1], -t.values[0]))
 
 
-def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trials: int) -> dict:
+def tune_and_train(
+    horizon: int,
+    df: pd.DataFrame,
+    feat_cols: list[str],
+    n_trials: int,
+    save_model: bool = True,
+) -> dict:
     train_df, val_df, test_df = splits.split(df)
 
     X_train, y_train, cur_train, _ = prepare_xy(train_df, horizon, feat_cols)
@@ -164,8 +170,9 @@ def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trial
         "trial_number": selected_trial.number,
     }
 
-    config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    final_model.save_model(config.MODELS_DIR / f"model_{horizon}h.ubj")
+    if save_model:
+        config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        final_model.save_model(config.MODELS_DIR / f"model_{horizon}h.ubj")
 
     print(
         f"[horizon {horizon}h] model RMSE={model_metrics['rmse']:.3f} MAE={model_metrics['mae']:.3f} "
