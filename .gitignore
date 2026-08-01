@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 data/processed/
+data/raw/weather_state*.parquet
 models/*.json
 !models/metrics.json
 models/*.pkl
