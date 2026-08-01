@@ -54,3 +54,19 @@ FFT_BAND_EDGES_CPH = [0.0, 1 / 36, 1 / 12, 0.5]
 OPENMETEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 TARGET_COL = "pm25"
+
+# Health-exceedance threshold (µg/m3), WHO 24h PM2.5 guideline. Anchors both the
+# training sample weighting (losses.sample_weights) and the multi-objective Optuna
+# exceedance-detection metric (metrics.exceedance_scores), so train/serve parity holds
+# on which threshold "counts" as a health exceedance. Configurable per deployment.
+HEALTH_THRESHOLD_UGM3 = 15.0
+
+# Beta for the F-beta exceedance-detection metric (metrics.exceedance_scores). beta > 1
+# weights recall over precision, reflecting that missing a health exceedance is worse
+# than a false alarm.
+DETECTION_FBETA = 2.0
+
+# Pareto-front selection tolerance (see scripts/train.py select_pareto_trial): among
+# trials whose below-threshold MAE is within this fraction of the front's best MAE,
+# pick the one with the highest exceedance F-beta.
+PARETO_MAE_TOLERANCE = 0.10

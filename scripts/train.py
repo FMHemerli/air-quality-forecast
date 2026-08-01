@@ -19,7 +19,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from air_quality_forecast import config, features, losses, splits  # noqa: E402
+from air_quality_forecast import config, features, losses, metrics, splits  # noqa: E402
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -46,6 +46,24 @@ def baseline_metrics(y_true: pd.Series, current_pm25: pd.Series) -> dict:
     }
 
 
+def select_pareto_trial(study: optuna.Study) -> optuna.trial.FrozenTrial:
+    """Pick the trial to deploy from a multi-objective study's Pareto front.
+
+    `study.best_trials` is the Pareto front for objectives
+    (below_threshold_mae [minimize], exceedance_fbeta [maximize]). Among the front's
+    trials whose below_threshold_mae is within `config.PARETO_MAE_TOLERANCE` of the
+    front's best (lowest) below_threshold_mae, select the one with the highest
+    exceedance_fbeta, breaking ties by lower below_threshold_mae. This favors detection
+    performance without accepting an unbounded regression-accuracy cost in the calm
+    regime.
+    """
+    front = study.best_trials
+    best_mae = min(t.values[0] for t in front)
+    cutoff = best_mae * (1 + config.PARETO_MAE_TOLERANCE)
+    eligible = [t for t in front if t.values[0] <= cutoff]
+    return max(eligible, key=lambda t: (t.values[1], -t.values[0]))
+
+
 def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trials: int) -> dict:
     train_df, val_df, test_df = splits.split(df)
 
@@ -53,10 +71,10 @@ def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trial
     X_val, y_val, cur_val, _ = prepare_xy(val_df, horizon, feat_cols)
     X_test, y_test, cur_test, _ = prepare_xy(test_df, horizon, feat_cols)
 
-    threshold = losses.spike_threshold(y_train)
-    w_train = losses.sample_weights(y_train, threshold)
+    health_threshold = config.HEALTH_THRESHOLD_UGM3
+    w_train = losses.sample_weights(y_train, health_threshold)
 
-    def objective(trial: optuna.Trial) -> float:
+    def objective(trial: optuna.Trial) -> tuple[float, float]:
         params = dict(
             max_depth=trial.suggest_int("max_depth", 3, 10),
             min_child_weight=trial.suggest_float("min_child_weight", 1e-1, 20, log=True),
@@ -82,18 +100,23 @@ def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trial
             verbose=False,
         )
         preds = model.predict(X_val)
-        return rmse(y_val, preds)
+        below_mae_val = metrics.below_threshold_mae(y_val, preds, health_threshold)
+        fbeta_val = metrics.exceedance_scores(
+            y_val, preds, health_threshold, config.DETECTION_FBETA
+        )["fbeta"]
+        return below_mae_val, fbeta_val
 
     sampler = optuna.samplers.TPESampler(seed=42)
-    pruner = optuna.pruners.MedianPruner()
-    study = optuna.create_study(direction="minimize", sampler=sampler, pruner=pruner)
+    study = optuna.create_study(directions=["minimize", "maximize"], sampler=sampler)
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
-    # Refit on train+val with the best params, evaluate once on the held-out test split.
-    best_params = study.best_params
+    selected_trial = select_pareto_trial(study)
+    best_params = selected_trial.params
+
+    # Refit on train+val with the selected params, evaluate once on the held-out test split.
     X_trainval = pd.concat([X_train, X_val])
     y_trainval = pd.concat([y_train, y_val])
-    w_trainval = losses.sample_weights(y_trainval, threshold)
+    w_trainval = losses.sample_weights(y_trainval, health_threshold)
 
     # Re-derive a good n_estimators via early stopping on a held-back tail of train+val.
     cutoff = int(len(X_trainval) * 0.9)
@@ -119,22 +142,49 @@ def tune_and_train(horizon: int, df: pd.DataFrame, feat_cols: list[str], n_trial
     }
     persistence = baseline_metrics(y_test, cur_test)
 
+    model_threshold_report = metrics.threshold_report(
+        y_test, test_preds, health_threshold, config.DETECTION_FBETA
+    )
+    persistence_threshold_report = metrics.threshold_report(
+        y_test, cur_test, health_threshold, config.DETECTION_FBETA
+    )
+
+    pareto_front = [
+        {
+            "below_mae": t.values[0],
+            "fbeta": t.values[1],
+            "params": t.params,
+        }
+        for t in study.best_trials
+    ]
+    selected_summary = {
+        "below_mae": selected_trial.values[0],
+        "fbeta": selected_trial.values[1],
+        "params": selected_trial.params,
+        "trial_number": selected_trial.number,
+    }
+
     config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
     final_model.save_model(config.MODELS_DIR / f"model_{horizon}h.ubj")
 
     print(
         f"[horizon {horizon}h] model RMSE={model_metrics['rmse']:.3f} MAE={model_metrics['mae']:.3f} "
         f"| persistence RMSE={persistence['rmse']:.3f} MAE={persistence['mae']:.3f} "
-        f"| n_trials={n_trials} best_params={best_params}"
+        f"| n_trials={n_trials} pareto_front={len(pareto_front)} "
+        f"selected_trial={selected_trial.number} best_params={best_params}"
     )
 
     return {
         "horizon_h": horizon,
-        "spike_threshold_ugm3": threshold,
+        "health_threshold_ugm3": health_threshold,
         "best_params": best_params,
         "n_boost_rounds": final_model.best_iteration,
         "model": model_metrics,
         "baseline_persistence": persistence,
+        "model_threshold_report": model_threshold_report,
+        "baseline_persistence_threshold_report": persistence_threshold_report,
+        "pareto_front": pareto_front,
+        "selected_trial": selected_summary,
         "n_train": len(X_train),
         "n_val": len(X_val),
         "n_test": len(X_test),
