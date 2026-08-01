@@ -10,6 +10,7 @@ from air_quality_forecast import config, data, features  # noqa: E402
 def main() -> None:
     raw = data.load_raw()
     hourly = data.to_hourly_series(raw)
+    hourly = data.attach_weather(hourly)
     print(f"[hourly] {len(hourly):,} site-hours across {hourly['site_id'].nunique()} sites")
     print(hourly.groupby("site_id")[config.TARGET_COL].apply(lambda s: s.notna().mean()).rename("coverage"))
 

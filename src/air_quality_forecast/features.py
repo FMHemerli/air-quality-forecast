@@ -32,6 +32,26 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         df[f"roll_{window}h_std"] = roll.std().reset_index(level=0, drop=True)
         df[f"roll_{window}h_max"] = roll.max().reset_index(level=0, drop=True)
 
+    if "precipitation" in df.columns and "relative_humidity_2m" in df.columns:
+        # Coerce defensively: weather columns may arrive as object/pd.NA dtype (e.g. when no
+        # weather has been downloaded yet), which pandas rolling() cannot aggregate directly.
+        df["precipitation"] = pd.to_numeric(df["precipitation"], errors="coerce")
+        df["relative_humidity_2m"] = pd.to_numeric(df["relative_humidity_2m"], errors="coerce")
+
+        precip_grp = df.groupby("site_id")["precipitation"]
+        for window in config.PRECIP_WINDOWS_H:
+            # Precipitation is exogenous observed data (not the pm25 target), so the trailing
+            # window through the current hour is legitimate — no shift(1) needed here, unlike
+            # the pm25 rolling stats above.
+            roll = precip_grp.rolling(window, min_periods=max(2, window // 2))
+            df[f"precip_{window}h_sum"] = roll.sum().reset_index(level=0, drop=True)
+
+        rh_grp = df.groupby("site_id")["relative_humidity_2m"]
+        for window in config.PRECIP_WINDOWS_H:
+            roll = rh_grp.rolling(window, min_periods=max(2, window // 2))
+            df[f"rh_{window}h_mean"] = roll.mean().reset_index(level=0, drop=True)
+        df["rh_now"] = df["relative_humidity_2m"]
+
     hour = df["dt"].dt.hour
     dow = df["dt"].dt.dayofweek
     month = df["dt"].dt.month
