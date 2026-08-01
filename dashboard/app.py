@@ -44,6 +44,44 @@ def load_metrics() -> dict:
         return json.load(f)
 
 
+def validate_metrics(metrics: dict) -> list[str]:
+    """Check that `metrics` (as loaded from models/metrics.json) has the shape this
+    dashboard needs for every horizon in `config.FORECAST_HORIZONS_H`.
+
+    Returns a list of human-readable descriptions of missing/malformed keys, empty if the
+    structure is valid. This only covers the "core" fields the dashboard treats as required
+    (model/baseline RMSE+MAE, the health threshold, and the presence of a threshold report);
+    the exceedance sub-fields and the all-horizon expander table are additionally accessed
+    with `.get()` fallbacks at display time, so a partially-populated file degrades to
+    hiding those specific widgets instead of failing validation outright.
+    """
+    required_stat_keys = ("rmse", "mae")
+    problems: list[str] = []
+    for h in config.FORECAST_HORIZONS_H:
+        h_key = f"{h}h"
+        hm = metrics.get(h_key)
+        if not isinstance(hm, dict):
+            problems.append(f"'{h_key}' (missing horizon entry)")
+            continue
+
+        model = hm.get("model")
+        if not isinstance(model, dict) or not all(k in model for k in required_stat_keys):
+            problems.append(f"'{h_key}.model.{{rmse,mae}}'")
+
+        baseline = hm.get("baseline_persistence")
+        if not isinstance(baseline, dict) or not all(k in baseline for k in required_stat_keys):
+            problems.append(f"'{h_key}.baseline_persistence.{{rmse,mae}}'")
+
+        if "health_threshold_ugm3" not in hm:
+            problems.append(f"'{h_key}.health_threshold_ugm3'")
+
+        report = hm.get("model_threshold_report")
+        if not isinstance(report, dict) or "below_threshold_mae" not in report or "exceedance" not in report:
+            problems.append(f"'{h_key}.model_threshold_report.{{below_threshold_mae,exceedance}}'")
+
+    return problems
+
+
 def main() -> None:
     st.title("PM2.5 Forecast — California EPA AQS Monitoring Sites")
     st.caption(
@@ -53,6 +91,14 @@ def main() -> None:
 
     df = load_featurized()
     metrics = load_metrics()
+
+    missing = validate_metrics(metrics)
+    if missing:
+        st.error(
+            "models/metrics.json is missing expected data: " + "; ".join(missing) + ". "
+            "Regenerate it by running `python scripts/train.py`."
+        )
+        st.stop()
 
     site_id = st.sidebar.selectbox(
         "Site", options=list(config.SITES.keys()), format_func=lambda s: f"{config.SITES[s]} ({s})"
@@ -74,15 +120,19 @@ def main() -> None:
     # XGBoost handles NaN features natively, so requiring every one of the 63 feature
     # columns to be non-null (as the old code did) drops far more rows than necessary —
     # spectral/climatology columns are legitimately NaN in early warm-up rows or sparse
-    # climatology cells. Only require the short-lag core signal, which is what a row
-    # needs to be meaningfully predictable at all.
-    core_cols = [f"lag_{h}h" for h in (1, 2, 3)]
+    # climatology cells. Only require the core short-lag columns (see
+    # features.core_lag_columns), which is what a row needs to be meaningfully predictable
+    # at all.
+    core_cols = features.core_lag_columns()
     predictable = view.dropna(subset=core_cols, how="any")
     preds = model.predict(predictable[feat_cols]) if len(predictable) else []
 
     m = metrics[f"{horizon}h"]
-    threshold = m["health_threshold_ugm3"]
-    exceedance = m["model_threshold_report"]["exceedance"]
+    # health_threshold_ugm3 and the exceedance sub-fields are validated as present for
+    # every configured horizon by validate_metrics(), but the exceedance metric itself
+    # (recall/fbeta) is not, so it's still accessed defensively here.
+    threshold = m.get("health_threshold_ugm3")
+    exceedance = (m.get("model_threshold_report") or {}).get("exceedance") or {}
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Model RMSE (test)", f"{m['model']['rmse']:.2f} µg/m³")
     col2.metric(
@@ -92,30 +142,35 @@ def main() -> None:
         delta_color="inverse",
     )
     col3.metric("Model MAE (test)", f"{m['model']['mae']:.2f} µg/m³")
-    col4.metric(
-        "Exceedance recall (test)",
-        f"{exceedance['recall']:.0%}",
-        delta=f"F-beta {exceedance['fbeta']:.2f}",
-        delta_color="off",
-    )
+    if "recall" in exceedance and "fbeta" in exceedance:
+        col4.metric(
+            "Exceedance recall (test)",
+            f"{exceedance['recall']:.0%}",
+            delta=f"F-beta {exceedance['fbeta']:.2f}",
+            delta_color="off",
+        )
+    else:
+        col4.metric("Exceedance recall (test)", "n/a")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=view["dt"], y=view[config.TARGET_COL], name="Actual PM2.5", line=dict(color="#2c3e50")))
-    exceeded = view[view[config.TARGET_COL] > threshold]
-    if len(exceeded):
-        fig.add_trace(go.Scatter(
-            x=exceeded["dt"], y=exceeded[config.TARGET_COL], mode="markers",
-            name="Actual exceedance", marker=dict(color="#c0392b", size=5),
-        ))
+    if threshold is not None:
+        exceeded = view[view[config.TARGET_COL] > threshold]
+        if len(exceeded):
+            fig.add_trace(go.Scatter(
+                x=exceeded["dt"], y=exceeded[config.TARGET_COL], mode="markers",
+                name="Actual exceedance", marker=dict(color="#c0392b", size=5),
+            ))
     if len(predictable):
         fig.add_trace(go.Scatter(
             x=predictable["dt"] + pd.Timedelta(hours=horizon), y=preds,
             name=f"Forecast (+{horizon}h, made at source time)", line=dict(color="#e67e22", dash="dot"),
         ))
-    fig.add_hline(
-        y=threshold, line_dash="dash", line_color="#c0392b",
-        annotation_text=f"WHO 24h guideline ({threshold:.0f} µg/m³)", annotation_position="top left",
-    )
+    if threshold is not None:
+        fig.add_hline(
+            y=threshold, line_dash="dash", line_color="#c0392b",
+            annotation_text=f"WHO 24h guideline ({threshold:.0f} µg/m³)", annotation_position="top left",
+        )
     fig.update_layout(
         title=f"{config.SITES[site_id]} — actual vs {horizon}h-ahead forecast",
         xaxis_title="Time (UTC)", yaxis_title="PM2.5 (µg/m³)", height=500,
@@ -131,19 +186,21 @@ def main() -> None:
     with st.expander("All-horizon metrics"):
         rows = []
         for h_key, hm in metrics.items():
-            tr = hm["model_threshold_report"]
-            exc = tr["exceedance"]
+            model_stats = hm.get("model") or {}
+            baseline_stats = hm.get("baseline_persistence") or {}
+            threshold_report = hm.get("model_threshold_report") or {}
+            exc = threshold_report.get("exceedance") or {}
             rows.append({
                 "horizon": h_key,
-                "model_rmse": hm["model"]["rmse"],
-                "persistence_rmse": hm["baseline_persistence"]["rmse"],
-                "model_mae": hm["model"]["mae"],
-                "persistence_mae": hm["baseline_persistence"]["mae"],
-                "below_threshold_mae": tr["below_threshold_mae"],
-                "exceedance_recall": exc["recall"],
-                "exceedance_precision": exc["precision"],
-                "exceedance_fbeta": exc["fbeta"],
-                "n_test": hm["n_test"],
+                "model_rmse": model_stats.get("rmse"),
+                "persistence_rmse": baseline_stats.get("rmse"),
+                "model_mae": model_stats.get("mae"),
+                "persistence_mae": baseline_stats.get("mae"),
+                "below_threshold_mae": threshold_report.get("below_threshold_mae"),
+                "exceedance_recall": exc.get("recall"),
+                "exceedance_precision": exc.get("precision"),
+                "exceedance_fbeta": exc.get("fbeta"),
+                "n_test": hm.get("n_test"),
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
 

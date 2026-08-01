@@ -335,6 +335,17 @@ def add_targets(df: pd.DataFrame, horizons_h=None) -> pd.DataFrame:
     return df
 
 
+def core_lag_columns(n: int = config.CORE_LAG_COUNT) -> list[str]:
+    """Return the names of the n shortest lag columns produced by `build_features`.
+
+    Names are derived from `config.LAG_HOURS` using the same `lag_{h}h` f-string pattern
+    `build_features` uses to create those columns, so the two can never disagree. `n` is
+    clamped to the number of configured lags if it exceeds them.
+    """
+    lags = sorted(config.LAG_HOURS)[: min(n, len(config.LAG_HOURS))]
+    return [f"lag_{lag}h" for lag in lags]
+
+
 def feature_columns(df: pd.DataFrame) -> list[str]:
     exclude = {"dt", config.TARGET_COL} | {c for c in df.columns if c.startswith("target_")}
     return [c for c in df.columns if c not in exclude]

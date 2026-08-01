@@ -31,6 +31,12 @@ FORECAST_HORIZONS_H = [1, 4, 12]
 LAG_HOURS = [1, 2, 3, 6, 12, 24, 48]
 ROLLING_WINDOWS_H = [3, 6, 12, 24]
 
+# Number of shortest LAG_HOURS lag columns considered "core": the minimum recent history a
+# row needs to be meaningfully predictable at all. Used by
+# features.core_lag_columns/dashboard/app.py to decide which rows have enough signal to
+# forecast, without requiring every (possibly NaN) feature column to be populated.
+CORE_LAG_COUNT = 3
+
 # Backward-looking precipitation aggregation windows (in hours), used by weather features.
 PRECIP_WINDOWS_H = [3, 6, 12, 24, 48]
 
