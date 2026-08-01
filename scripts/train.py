@@ -87,16 +87,21 @@ def tune_and_train(
             gamma=trial.suggest_float("gamma", 1e-3, 5.0, log=True),
             subsample=trial.suggest_float("subsample", 0.5, 1.0),
             colsample_bytree=trial.suggest_float("colsample_bytree", 0.5, 1.0),
-            learning_rate=trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
+            # Floor raised from 1e-3 to 0.02: below that, XGBoost needs the full tree
+            # budget to converge and early stopping never triggers, so every trial pays
+            # the full n_estimators cost for a small accuracy gain. See tune_and_train
+            # docstring context in train.py history for the diagnosis.
+            learning_rate=trial.suggest_float("learning_rate", 0.02, 0.3, log=True),
             reg_alpha=trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
             reg_lambda=trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
         )
         model = xgb.XGBRegressor(
-            n_estimators=2000,
+            n_estimators=600,
             tree_method="hist",
             enable_categorical=True,
-            early_stopping_rounds=50,
+            early_stopping_rounds=30,
             eval_metric="rmse",
+            n_jobs=4,
             **params,
         )
         model.fit(
@@ -112,9 +117,16 @@ def tune_and_train(
         )["fbeta"]
         return below_mae_val, fbeta_val
 
+    # n_jobs=3 runs trials concurrently (paired with n_jobs=4 per XGBRegressor, this
+    # matches the 12 logical threads of the Ryzen 5 9600X box). Trade-off: with
+    # concurrent trials, TPESampler(seed=42) no longer gives byte-identical
+    # reproducibility, since each new trial's suggestion depends on which prior trials
+    # have already completed and reported results, and that completion order is no
+    # longer deterministic. Results remain statistically equivalent across runs. This
+    # is an accepted trade for a portfolio project prioritizing wall-clock time.
     sampler = optuna.samplers.TPESampler(seed=42)
     study = optuna.create_study(directions=["minimize", "maximize"], sampler=sampler)
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    study.optimize(objective, n_trials=n_trials, n_jobs=3, show_progress_bar=False)
 
     selected_trial = select_pareto_trial(study)
     best_params = selected_trial.params
@@ -127,11 +139,12 @@ def tune_and_train(
     # Re-derive a good n_estimators via early stopping on a held-back tail of train+val.
     cutoff = int(len(X_trainval) * 0.9)
     final_model = xgb.XGBRegressor(
-        n_estimators=2000,
+        n_estimators=600,
         tree_method="hist",
         enable_categorical=True,
-        early_stopping_rounds=50,
+        early_stopping_rounds=30,
         eval_metric="rmse",
+        n_jobs=4,
         **best_params,
     )
     final_model.fit(
