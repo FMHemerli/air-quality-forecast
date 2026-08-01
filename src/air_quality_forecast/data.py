@@ -3,6 +3,8 @@ import pandas as pd
 
 from . import config
 
+WEATHER_COLS = ["precipitation", "relative_humidity_2m"]
+
 
 def load_raw() -> pd.DataFrame:
     frames = [pd.read_parquet(config.RAW_DIR / f"pm25_state{config.STATE_CODE}_{y}.parquet") for y in config.YEARS]
@@ -35,3 +37,40 @@ def to_hourly_series(raw: pd.DataFrame) -> pd.DataFrame:
         out.append(g)
 
     return pd.concat(out).reset_index()
+
+
+def load_weather() -> pd.DataFrame:
+    """Read and concatenate all per-site weather parquets saved by scripts/download_weather.py.
+
+    Returns columns [site_id, dt, precipitation, relative_humidity_2m]. Raises FileNotFoundError
+    with a clear message if no weather parquets are present yet.
+    """
+    paths = sorted(config.RAW_DIR.glob(f"weather_state{config.STATE_CODE}_*.parquet"))
+    if not paths:
+        raise FileNotFoundError(
+            f"No weather parquets found in {config.RAW_DIR}. Run scripts/download_weather.py first."
+        )
+    frames = [pd.read_parquet(p) for p in paths]
+    return pd.concat(frames, ignore_index=True)
+
+
+def attach_weather(hourly: pd.DataFrame) -> pd.DataFrame:
+    """Left-merge weather (precipitation, relative_humidity_2m) onto an hourly PM2.5 frame.
+
+    Uses (site_id, dt) as the join key so it preserves the regular hourly grid and every
+    PM2.5 row produced by to_hourly_series, regardless of weather coverage. This is the single
+    function callers (feature builder, inference) should use to attach weather, keeping
+    train/serve parity. If no weather data has been downloaded yet, returns `hourly` unchanged
+    (with NaN-filled weather columns) so callers that don't need weather are never broken.
+    """
+    try:
+        weather = load_weather()
+    except FileNotFoundError:
+        out = hourly.copy()
+        for col in WEATHER_COLS:
+            # float("nan") keeps the column float64 (not object/pd.NA), so downstream
+            # rolling-window feature code works unchanged on the all-missing case.
+            out[col] = float("nan")
+        return out
+
+    return hourly.merge(weather, on=["site_id", "dt"], how="left")

@@ -31,4 +31,10 @@ FORECAST_HORIZONS_H = [1, 4, 12]
 LAG_HOURS = [1, 2, 3, 6, 12, 24, 48]
 ROLLING_WINDOWS_H = [3, 6, 12, 24]
 
+# Backward-looking precipitation aggregation windows (in hours), used by weather features.
+PRECIP_WINDOWS_H = [3, 6, 12, 24, 48]
+
+# Open-Meteo historical weather API (no key required).
+OPENMETEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
 TARGET_COL = "pm25"
