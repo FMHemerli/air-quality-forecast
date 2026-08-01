@@ -33,7 +33,8 @@ COMBINATIONS: list[tuple[str, list[str]]] = [
     ("base+fft", ["base", "fft"]),
     ("base+wavelet", ["base", "wavelet"]),
     ("base+denoise", ["base", "denoise"]),
-    ("base+all", ["base", "precip", "fft", "wavelet", "denoise"]),
+    ("base+seasonal", ["base", "seasonal"]),
+    ("base+all", ["base", "precip", "fft", "wavelet", "denoise", "seasonal"]),
 ]
 
 # Metric columns pulled out of `model_threshold_report` for the comparison table/CSV, and
