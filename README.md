@@ -93,6 +93,32 @@ python scripts/train.py --trials 30   # trains models/model_{1,4,12}h.json + met
 streamlit run dashboard/app.py
 ```
 
+## Next steps — a problem worth thinking about
+
+One thing this project currently gets wrong, stated plainly because it's more interesting
+than pretending otherwise: the WHO PM2.5 guideline of 15 µg/m³ is a **24-hour mean**, and
+the exceedance detection here compares **hourly** readings against it. The units match, so
+the comparison looks reasonable. The averaging windows don't match, and that's the problem.
+
+It matters because PM2.5 has a strong diurnal cycle driven by the boundary layer — night
+compresses it, afternoon mixing dilutes it. A single fixed hourly threshold therefore
+over-flags the naturally dirty hours and under-flags the naturally clean ones, partly
+measuring what time it is instead of how bad the air is. It also means the label being
+optimized ("this hour crossed 15") isn't the event the guideline regulates ("the day's mean
+crossed 15"), and that hourly crossings are common enough in California to inflate the
+detection score by construction.
+
+The direction I find most promising is a multiplicative diurnal profile: since pollutant
+concentrations are roughly lognormal, an hour-of-day threshold `τ_h = 15 · r_h` — a static
+24-value lookup per site — corrects the bias while staying physically interpretable. The
+alternative is to drop thresholding raw values entirely and estimate a calibrated
+probability that the *day's* mean will exceed the guideline. Either way, the evaluation has
+to move to the daily level, and needs a ceiling: one hour cannot determine a 24-hour mean,
+and that limit should be measured rather than ignored.
+
+Full reasoning, including the open questions, in
+[`docs/24h-guideline-hourly-forecast.md`](docs/24h-guideline-hourly-forecast.md).
+
 ## Data & provenance
 
 Data source: [EPA Air Quality System (AQS)](https://aqs.epa.gov/aqsweb/airdata/download_files.html),
