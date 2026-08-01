@@ -109,6 +109,17 @@ Two conclusions: (a) more features is not better — the 63-feature combination 
 at no horizon; (b) at the longest horizon the treatments buy detection at the cost of
 error, which is exactly the trade-off the multi-objective setup was built to make visible.
 
+**What this ablation cannot tell you.** Because the exceedance label is an hourly crossing
+of a 24-hour guideline (see [Next steps](#next-steps--a-problem-worth-thinking-about)), the
+detection score is partly a function of the diurnal cycle: some hours are simply more likely
+to exceed. The groups that gain recall at 12h — wavelet, seasonal, precipitation — are also
+the ones best equipped to represent that cycle, so part of their gain may be a better clock
+rather than a better forecast. The `base` combination already contains cyclical hour/day/month
+encodings, so these are incremental gains over a clock-aware baseline, and the model beats the
+persistence baseline on exceedance F-beta at 4h (0.674 vs 0.618) and 12h (0.608 vs 0.506).
+But the control that would settle it — a calendar-only detector, using no pollution history at
+all — was not run. Until it is, read the 12h detection gains as unattributed.
+
 ## Repo layout
 
 ```

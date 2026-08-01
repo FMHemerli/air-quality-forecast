@@ -104,6 +104,29 @@ And is 15 µg/m³ even the interesting threshold for hourly work? The US AQI
 may be the more honest target for an hourly detector. Worth measuring both rather than
 arguing about it.
 
+## A consequence already visible in the ablation
+
+This isn't only a future concern — it contaminates a result already measured. In the feature
+ablation, the groups that raise exceedance recall at the 12-hour horizon (wavelet, seasonal,
+precipitation) are precisely the ones that best represent the diurnal and annual cycles. The
+FFT diurnal band energy, the day-of-year harmonics, and a climatological anomaly indexed by
+(site, month, hour) are all, among other things, high-resolution clocks.
+
+If the exceedance label is partly a function of what hour it is, then a better clock buys
+recall without buying any forecasting skill. The ablation as run cannot separate the two.
+
+Two things argue against the strong version of that objection: the `base` combination already
+carries cyclical hour/day-of-week/month encodings, so every reported delta is incremental over
+a clock-aware baseline; and the model beats the persistence baseline on exceedance F-beta at
+4h (0.674 vs 0.618) and 12h (0.608 vs 0.506), which a pure clock could not do, since
+persistence carries information about the air and none about the hour.
+
+What would settle it is a **calendar-only detector** — hour, day-of-week, month and site, with
+no pollution history whatsoever — added as another ablation combination. If its 12h recall
+approaches the 0.685 that the wavelet group reaches, the gain is clock knowledge. That control
+has not been run, and until it is, the 12h detection improvements should be read as
+unattributed. It is cheap to add and is the first thing to do when this study is picked up.
+
 ## Cost of acting on this
 
 Changing the target definition touches `metrics.py`, the Optuna objective, and every
