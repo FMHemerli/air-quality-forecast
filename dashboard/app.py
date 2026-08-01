@@ -26,6 +26,7 @@ st.set_page_config(page_title="PM2.5 Forecast", layout="wide")
 def load_featurized() -> pd.DataFrame:
     raw = data.load_raw()
     hourly = data.to_hourly_series(raw)
+    hourly = data.attach_weather(hourly)
     feat = features.build_features(hourly)
     return features.add_targets(feat)
 
@@ -70,10 +71,18 @@ def main() -> None:
     model = load_model(horizon)
 
     target_col = f"target_{horizon}h"
-    predictable = view.dropna(subset=feat_cols, how="any")
+    # XGBoost handles NaN features natively, so requiring every one of the 63 feature
+    # columns to be non-null (as the old code did) drops far more rows than necessary —
+    # spectral/climatology columns are legitimately NaN in early warm-up rows or sparse
+    # climatology cells. Only require the short-lag core signal, which is what a row
+    # needs to be meaningfully predictable at all.
+    core_cols = [f"lag_{h}h" for h in (1, 2, 3)]
+    predictable = view.dropna(subset=core_cols, how="any")
     preds = model.predict(predictable[feat_cols]) if len(predictable) else []
 
     m = metrics[f"{horizon}h"]
+    threshold = m["health_threshold_ugm3"]
+    exceedance = m["model_threshold_report"]["exceedance"]
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Model RMSE (test)", f"{m['model']['rmse']:.2f} µg/m³")
     col2.metric(
@@ -83,31 +92,57 @@ def main() -> None:
         delta_color="inverse",
     )
     col3.metric("Model MAE (test)", f"{m['model']['mae']:.2f} µg/m³")
-    col4.metric("Spike threshold (p75, train)", f"{m['spike_threshold_ugm3']:.1f} µg/m³")
+    col4.metric(
+        "Exceedance recall (test)",
+        f"{exceedance['recall']:.0%}",
+        delta=f"F-beta {exceedance['fbeta']:.2f}",
+        delta_color="off",
+    )
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=view["dt"], y=view[config.TARGET_COL], name="Actual PM2.5", line=dict(color="#2c3e50")))
+    exceeded = view[view[config.TARGET_COL] > threshold]
+    if len(exceeded):
+        fig.add_trace(go.Scatter(
+            x=exceeded["dt"], y=exceeded[config.TARGET_COL], mode="markers",
+            name="Actual exceedance", marker=dict(color="#c0392b", size=5),
+        ))
     if len(predictable):
         fig.add_trace(go.Scatter(
             x=predictable["dt"] + pd.Timedelta(hours=horizon), y=preds,
             name=f"Forecast (+{horizon}h, made at source time)", line=dict(color="#e67e22", dash="dot"),
         ))
+    fig.add_hline(
+        y=threshold, line_dash="dash", line_color="#c0392b",
+        annotation_text=f"WHO 24h guideline ({threshold:.0f} µg/m³)", annotation_position="top left",
+    )
     fig.update_layout(
         title=f"{config.SITES[site_id]} — actual vs {horizon}h-ahead forecast",
         xaxis_title="Time (UTC)", yaxis_title="PM2.5 (µg/m³)", height=500,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        "The WHO guideline of 15 µg/m³ is defined as a 24-hour mean; the line above compares it "
+        "directly against hourly readings, which is a convenient simplification, not a rigorous "
+        "match (see docs/24h-guideline-hourly-forecast.md)."
+    )
 
     with st.expander("All-horizon metrics"):
         rows = []
         for h_key, hm in metrics.items():
+            tr = hm["model_threshold_report"]
+            exc = tr["exceedance"]
             rows.append({
                 "horizon": h_key,
                 "model_rmse": hm["model"]["rmse"],
                 "persistence_rmse": hm["baseline_persistence"]["rmse"],
                 "model_mae": hm["model"]["mae"],
                 "persistence_mae": hm["baseline_persistence"]["mae"],
+                "below_threshold_mae": tr["below_threshold_mae"],
+                "exceedance_recall": exc["recall"],
+                "exceedance_precision": exc["precision"],
+                "exceedance_fbeta": exc["fbeta"],
                 "n_test": hm["n_test"],
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True)
