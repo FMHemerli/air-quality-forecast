@@ -12,6 +12,7 @@ import pywt
 from numpy.lib.stride_tricks import sliding_window_view
 
 from . import config
+from .splits import TRAIN_END
 
 
 def _trailing_windows(shifted_values: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray]:
@@ -182,6 +183,87 @@ def _add_spectral_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _add_seasonal_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add day-of-year harmonic (`seas_doy_`) and climatological-anomaly (`seas_`) features.
+
+    Day-of-year harmonics -- `seas_doy_sin_{k}`/`seas_doy_cos_{k}` for k = 1..
+    config.SEASONAL_HARMONICS, using doy = df["dt"].dt.dayofyear over a 365.25-day year --
+    give a continuous annual cycle free of the month-boundary discontinuities in month_sin/
+    cos, and (with multiple harmonics) can represent a non-sinusoidal annual shape. That
+    matters here because California PM2.5 has two distinct seasonal peaks (a sharp winter
+    Central Valley inversion peak and a separately-shaped wildfire-season peak) that a single
+    sin/cos pair cannot fit. month_sin/cos is left untouched (still part of the "base" group)
+    so existing recorded results stay comparable.
+
+    Climatological anomaly -- expresses how unusual the most recent reading is for this
+    site, at this time of year, at this hour, which is far more informative than the raw
+    level (e.g. 20 ug/m3 is anomalous on the coast in summer, routine in Fresno in winter):
+      seas_climatology     -- mean pm25 for this row's (site_id, calendar month, hour-of-day)
+                               cell. Cell definition = 5 sites x 12 months x 24 hours = 1440
+                               cells over the training rows (~90 samples/cell at hourly
+                               resolution over ~2 training years) -- dense enough to be
+                               stable. Day-of-year cells (5 x 365 x 24, ~3 samples/cell) were
+                               rejected as far too sparse.
+      seas_anomaly_1h       -- shift(1) pm25 minus seas_climatology.
+      seas_anomaly_ratio    -- shift(1) pm25 divided by seas_climatology (NaN whenever the
+                               climatology cell is NaN or <= 0, since concentrations are
+                               non-negative and a ratio against a non-positive/undefined
+                               baseline is meaningless).
+      seas_anomaly_24h_mean -- trailing 24h mean of seas_anomaly_1h. No extra shift is
+                               applied here (same pattern as den_roll_24h_mean in
+                               `_add_spectral_features`): seas_anomaly_1h is already a
+                               t-1-only quantity for every row, so rolling over it directly
+                               stays strictly backward-looking.
+
+    Leakage rule (both parts mandatory):
+    (a) The climatology is estimated using ONLY rows with dt < splits.TRAIN_END, never the
+        full dataset, so no validation/test-period information leaks into it. TRAIN_END is a
+        fixed constant, so the dashboard/inference path recomputes the identical statistic
+        from the same historical rows at serve time -- train/serve parity holds without
+        needing to ship a separately-fitted lookup table.
+    (b) The anomaly columns are always computed against grp.shift(1) pm25 -- the same lagged
+        series the rolling stats use -- never the current row's pm25, so they cannot leak
+        the target.
+
+    Climatology cells with zero training-period rows for a given (site, month, hour) yield
+    NaN for seas_climatology (and therefore for the two anomaly columns derived from it); no
+    fallback to a global mean is used, so as not to silently blend unrelated regimes.
+    """
+    dt = df["dt"]
+    doy = dt.dt.dayofyear
+    for k in range(1, config.SEASONAL_HARMONICS + 1):
+        df[f"seas_doy_sin_{k}"] = np.sin(2 * np.pi * k * doy / 365.25)
+        df[f"seas_doy_cos_{k}"] = np.cos(2 * np.pi * k * doy / 365.25)
+
+    month = dt.dt.month
+    hour = dt.dt.hour
+    train_mask = (dt < TRAIN_END).to_numpy()
+
+    climatology = (
+        df.loc[train_mask]
+        .assign(_month=month.to_numpy()[train_mask], _hour=hour.to_numpy()[train_mask])
+        .groupby(["site_id", "_month", "_hour"])[config.TARGET_COL]
+        .mean()
+    )
+    cell_index = pd.MultiIndex.from_arrays(
+        [df["site_id"], month, hour], names=["site_id", "_month", "_hour"]
+    )
+    df["seas_climatology"] = climatology.reindex(cell_index).to_numpy()
+
+    shifted = df.groupby("site_id")[config.TARGET_COL].shift(1)
+    clim = df["seas_climatology"]
+    df["seas_anomaly_1h"] = shifted - clim
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = shifted / clim
+    df["seas_anomaly_ratio"] = np.where(clim > 0, ratio, np.nan)
+
+    anom_grp = df.groupby("site_id")["seas_anomaly_1h"]
+    df["seas_anomaly_24h_mean"] = (
+        anom_grp.rolling(24, min_periods=12).mean().reset_index(level=0, drop=True)
+    )
+    return df
+
+
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """Add lag, rolling-window, spectral, and cyclical calendar features.
 
@@ -238,6 +320,8 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["month_sin"] = np.sin(2 * np.pi * month / 12)
     df["month_cos"] = np.cos(2 * np.pi * month / 12)
 
+    df = _add_seasonal_features(df)
+
     df["site_id"] = df["site_id"].astype("category")
     return df
 
@@ -265,6 +349,7 @@ _FEATURE_GROUPS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "fft": (("fft_",), ()),
     "wavelet": (("wav_",), ()),
     "denoise": (("den_",), ()),
+    "seasonal": (("seas_",), ()),
 }
 
 
@@ -273,8 +358,8 @@ def select_feature_groups(df: pd.DataFrame, groups: list[str]) -> list[str]:
 
     Groups are matched by column prefix (plus a few exact names for "base"/"precip"):
     "base" -> lag_, roll_, hour_, dow_, month_, site_id; "precip" -> precip_, rh_,
-    precipitation, relative_humidity_2m; "fft" -> fft_; "wavelet" -> wav_; "denoise" -> den_.
-    Raises ValueError for an unrecognized group name.
+    precipitation, relative_humidity_2m; "fft" -> fft_; "wavelet" -> wav_; "denoise" -> den_;
+    "seasonal" -> seas_. Raises ValueError for an unrecognized group name.
     """
     unknown = set(groups) - _FEATURE_GROUPS.keys()
     if unknown:

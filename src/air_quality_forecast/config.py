@@ -50,6 +50,13 @@ WAVELET_LEVELS = 3
 FFT_BAND_NAMES = ["low", "diurnal", "high"]
 FFT_BAND_EDGES_CPH = [0.0, 1 / 36, 1 / 12, 0.5]
 
+# Number of sin/cos harmonic pairs used for the day-of-year seasonal cycle
+# (features.seas_doy_sin_k/seas_doy_cos_k). A single harmonic (like month_sin/cos) can only
+# represent a pure sinusoid; California PM2.5 has a non-sinusoidal annual shape (a sharp
+# winter Central Valley inversion peak plus a separate, differently-shaped wildfire-season
+# peak), which needs the extra harmonics to be approximated well.
+SEASONAL_HARMONICS = 3
+
 # Open-Meteo historical weather API (no key required).
 OPENMETEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
