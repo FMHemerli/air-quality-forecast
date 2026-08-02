@@ -160,6 +160,12 @@ clock could not do, since persistence carries information about the air and none
 hour. The control that would settle it — a calendar-only detector, using no pollution history
 at all — is still not run. Until it is, read the 12h detection gains as unattributed.
 
+There is a second, blunter limit on this table: the detection deltas ranked above are smaller
+than the difference between two runs of the identical pipeline, which reaches 0.153 F₂ at 12h.
+The RMSE and MAE columns are stable and can be read as they stand; the exceedance columns
+cannot support a ranking until each configuration is run over several seeds. See
+[the reproducibility caveat](#the-caveat-that-outranks-the-others-the-detection-scores-do-not-reproduce).
+
 ## Repo layout
 
 ```
@@ -291,6 +297,42 @@ averages down, the negatives cancel by design, and daily means sit above the det
 That it is also the fix for the averaging-window mismatch above is not a coincidence — both
 problems come from reading an hourly instrument as though it answered a daily question.
 
+### The 1h forecast is a delayed echo, and that is why it loses
+
+The results table reports that persistence beats the model at 1h (RMSE 4.45 against 5.80)
+without saying why. The reason is measurable, and it is not subtle.
+
+Shifting a forecast in time and re-scoring it locates what the forecast is actually tracking.
+Applied per site on a sample held fixed across shifts, with `s < 0` meaning the forecast for
+time `τ+s` explains the truth at `τ` — that is, the forecast runs late:
+
+| horizon | model, best shift | model MAE there | model MAE at `s=0` | persistence, best shift |
+|---|---|---|---|---|
+| 1h | **−2** | 2.026 | 3.363 | −1 (MAE 0.000) |
+| 4h | −5 | 3.255 | 3.966 | −4 (MAE 0.000) |
+| 12h | −1 | 4.441 | 4.450 | −12 (MAE 0.000) |
+
+The persistence column is the control and it behaves exactly as it must: persistence *is* the
+truth delayed by one horizon, so its profile bottoms out at `−h` with zero error. The
+diagnostic works.
+
+Read against it, the 1h model is a replica of the past delayed by two hours — one hour *more*
+delayed than simply repeating the last reading would be. It is not forecasting; it is
+smoothing, and worse-timed than the trivial baseline it loses to. The 4h model echoes as well,
+at delay 5, but smoothly enough to still win on RMSE. Only the 12h model is genuinely aligned
+with the time it is predicting, and it is also the one with the widest margin over persistence.
+
+This is a model defect rather than a limit of the instrument, which puts it in a different
+class from everything else in this section — and unlike the detection findings, it is on the
+RMSE scale, where results do reproduce across runs (see below). The gap at 1h is 1.35 RMSE
+against a baseline that costs nothing to compute, so there is real headroom, and no need for a
+new metric to see whether it closed.
+
+The obvious thing to try is training on the change, `y[t+h] − pm25[t]`, instead of the level:
+the degenerate echo solution becomes "predict zero", so the shortcut stops paying. That has
+not been tested, and it carries a known cost — differencing adds the measurement noise of
+`pm25[t]` to the target — so it is a hypothesis, not a plan.
+
 ### The caveat that outranks the others: the detection scores do not reproduce
 
 Every improvement discussed above is smaller than the noise between two runs of this pipeline.
@@ -331,6 +373,32 @@ time, which is why it has not been done here. It is also a precondition for the 
 section — until the detection metric is stable enough to measure a change, choosing a decision
 threshold, adopting a lead-time objective, or ranking feature groups by recall are all
 decisions made on a number that will not survive being computed twice.
+
+### What is actually worth doing
+
+Everything above, collected and ranked by expected value. The **measurable today** column is a
+real filter rather than a formality: RMSE reproduces across runs to within 0.07, detection F₂
+at 12h does not reproduce to within 0.15, so a change that moves only detection currently
+cannot be told apart from run-to-run noise.
+
+| | Change | What the evidence says | Measurable today | Cost |
+|---|---|---|---|---|
+| 1 | Repeat every run over several seeds, report median and spread | Precondition for judging anything below. Two identical runs differ by 0.153 F₂ at 12h | — it *is* the measurement | n× training time |
+| 2 | Diagnose the 1h echo; try training on `y[t+h] − pm25[t]` | Defect confirmed: the 1h forecast lags 2h, one hour worse than the trivial baseline. Headroom is 1.35 RMSE | **Yes** — RMSE scale, reproduces | one training run |
+| 3 | Aggregate labels and evaluation to 24-hour means | Dissolves the averaging-window mismatch, the sub-MDL floor and the negatives at once, instead of working around them | Yes, and it *raises* stability by averaging noise down | Large: new label, new metrics, full rewrite of results |
+| 4 | Report lead-time (early-credit) F₂ next to exact-hour F₂ | Changes conclusions honestly — at 4h the model's advantage over persistence grows from +0.035 to +0.099 with 2h of credit; at 12h it shrinks from +0.040 to +0.012, and turns negative at 3h | Yes — no model change, same frozen predictions | Small |
+| 5 | Decision threshold `c*` chosen on validation, separate from the 35 µg/m³ health threshold | +0.107 F₂ at 4h against 0.033 of run noise, so probably real; +0.161 at 12h against 0.153 of noise, so inconclusive. Costs precision (4h: 0.574 → 0.348) | Only at 4h, and only after item 1 | Small, but needs an operational decision on the recall/precision trade |
+| 6 | Add a calendar-only ablation control (hour, day-of-week, month, site; no pollution history) | Still unrun. Until it exists, the detection gains attributed to spectral and seasonal features stay unattributed | Yes, but see item 1 for the ranking deltas | One ablation run |
+
+Not worth doing, all tested and reported above: `reg:gamma`, isotonic recalibration, dropping
+sub-MDL rows from `below_threshold_mae`, and replacing the Pareto front with a weighted
+composite score. The first three fail the same way — they optimize error on the physical scale
+and are blind to 35 being a decision boundary. The fourth trades an explicit trade-off for a
+hidden exchange rate.
+
+The ordering is deliberate. Items 1 and 2 are the only ones that can be honestly evaluated with
+what is in this repository today; item 3 is the one that would make most of this section
+obsolete rather than resolved.
 
 ## Data & provenance
 
