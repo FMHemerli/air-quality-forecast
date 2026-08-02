@@ -291,6 +291,47 @@ averages down, the negatives cancel by design, and daily means sit above the det
 That it is also the fix for the averaging-window mismatch above is not a coincidence — both
 problems come from reading an hourly instrument as though it answered a daily question.
 
+### The caveat that outranks the others: the detection scores do not reproduce
+
+Every improvement discussed above is smaller than the noise between two runs of this pipeline.
+
+Re-running `train.py` unchanged — same code, same data, same split, same seed — reproduces the
+regression metrics almost exactly and the detection metrics not at all:
+
+| horizon | RMSE published | RMSE re-run | F₂ published | F₂ re-run |
+|---|---|---|---|---|
+| 4h | 6.54 | 6.534 | 0.531 | 0.498 |
+| 12h | 7.26 | 7.325 | 0.328 | **0.481** |
+
+RMSE lands within 0.07. F₂ at 12h moves by 0.153, which is half the size of the number itself.
+
+The mechanism is already noted in `train.py`: `n_jobs=3` runs trials concurrently, so each TPE
+suggestion depends on which earlier trials happen to have finished, and `TPESampler(seed=42)`
+no longer pins the search. That comment calls the results "statistically equivalent across
+runs". For RMSE the table above says it is right. For exceedance detection at a ~2% base rate
+it is wrong: roughly 450 positives per horizon, split across a Pareto front chosen partly on
+F-beta, is not enough to make the selected trial stable.
+
+What that costs, stated plainly:
+
+- **Any single-run comparison smaller than ~0.15 F₂ at 12h is unfalsifiable.** That includes
+  the lead-time objective tested against the current one, which came out +0.034 at 4h and
+  −0.068 at 12h — inconsistent in sign, and therefore indistinguishable from run noise.
+- **It reaches results already published here.** The ablation section ranks feature
+  combinations on detection deltas far smaller than 0.15. `docs/24h-guideline-hourly-forecast.md`
+  already warns that ablation rankings are properties of a (threshold, split) pair rather than
+  of the features; that warning is stronger than it was written — they are properties of the
+  *run* as well.
+- It does **not** undermine the RMSE/MAE results, the persistence comparison on regression
+  error, or anything about the feature causality guarantees.
+
+The fix is repetition, not modeling: run each configuration over several seeds and report a
+median with a spread instead of a point. It is cheap to describe and costs n× the training
+time, which is why it has not been done here. It is also a precondition for the rest of this
+section — until the detection metric is stable enough to measure a change, choosing a decision
+threshold, adopting a lead-time objective, or ranking feature groups by recall are all
+decisions made on a number that will not survive being computed twice.
+
 ## Data & provenance
 
 Two public datasets, each downloaded by a script in this repository, so the whole pipeline
