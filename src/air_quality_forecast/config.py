@@ -68,11 +68,41 @@ OPENMETEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
 TARGET_COL = "pm25"
 
-# Health-exceedance threshold (µg/m3), WHO 24h PM2.5 guideline. Anchors both the
-# training sample weighting (losses.sample_weights) and the multi-objective Optuna
-# exceedance-detection metric (metrics.exceedance_scores), so train/serve parity holds
-# on which threshold "counts" as a health exceedance. Configurable per deployment.
-HEALTH_THRESHOLD_UGM3 = 15.0
+# Health-exceedance threshold (µg/m3). Anchors DETECTION ONLY: the multi-objective Optuna
+# metric (metrics.exceedance_scores), the Pareto selection rule, and the primary threshold
+# report written to models/metrics.json. It deliberately does NOT anchor the training sample
+# weighting -- see SPIKE_WEIGHT_ANCHOR_UGM3 below.
+#
+# 35.0 sits in the US AQI "Unhealthy for Sensitive Groups" region. It is a round-number
+# stand-in, not the official breakpoint: the 2024 AQI revision puts that band at 35.5-55.4
+# µg/m3, and as a 24-hour average. Moving here from the WHO 15 µg/m3 guideline reduces one of
+# the three objections in docs/24h-guideline-hourly-forecast.md -- exceedance drops from
+# ~13% of hours to ~2%, so F-beta is far less inflated by base rate -- but does NOT fix the
+# averaging-window mismatch, since 35 is a 24h standard applied hourly here too.
+HEALTH_THRESHOLD_UGM3 = 35.0
+
+# Additional thresholds (µg/m3) evaluated and reported alongside the primary one. Pure
+# post-hoc readout on frozen predictions: these never touch training, tuning, or model
+# selection. 15.0 is the WHO 24h guideline, kept so the dashboard can compare the two and so
+# the numbers published before the migration to 35 stay reproducible.
+SECONDARY_HEALTH_THRESHOLDS_UGM3 = [15.0]
+
+# Anchor (µg/m3) for the asymmetric training sample weighting (losses.sample_weights),
+# deliberately decoupled from HEALTH_THRESHOLD_UGM3. Measured on the training split: an
+# anchor of 15 upweights 12.2% of rows (mean weight 1.180), while an anchor of 35 reaches
+# only 2.0% (mean weight 1.014) -- near enough to an identity transform that the "missing a
+# spike costs more than a false alarm" mechanism would stop doing meaningful work. Detection
+# moved to 35; the weighting stays where it still bites. Do not collapse the two constants
+# back into one.
+SPIKE_WEIGHT_ANCHOR_UGM3 = 15.0
+
+# Human-readable provenance for each threshold, shared by the dashboard (axis annotation,
+# selector labels) and the docs, so the standard a line refers to is never hardcoded next to
+# a number it does not match.
+THRESHOLD_LABELS = {
+    35.0: "US AQI Unhealthy for Sensitive Groups",
+    15.0: "WHO 24h guideline",
+}
 
 # Beta for the F-beta exceedance-detection metric (metrics.exceedance_scores). beta > 1
 # weights recall over precision, reflecting that missing a health exceedance is worse

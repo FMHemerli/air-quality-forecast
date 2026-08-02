@@ -1,18 +1,18 @@
 """Asymmetric sample weighting: missing a pollution spike is operationally worse than a
 false alarm (a health advisory that didn't need to fire is cheap; a spike nobody warned
-about is not). Weight is derived from the training split's own target distribution, not
-a hardcoded constant, so it adapts per-site/per-horizon rather than encoding one fixed
-domain threshold.
+about is not).
+
+The weight is anchored on a fixed configured constant (`config.SPIKE_WEIGHT_ANCHOR_UGM3`),
+supplied by the caller. That anchor is deliberately NOT the detection threshold
+(`config.HEALTH_THRESHOLD_UGM3`): weighting and detection answer different questions, and
+tying them together made the weighting collapse when detection moved to 35 µg/m³ — only 2.0%
+of training rows would be upweighted, at a mean weight of 1.014, versus 12.2% and 1.180 at
+an anchor of 15. See the comments on both constants in config.py.
 """
 import numpy as np
 import pandas as pd
 
-SPIKE_QUANTILE = 0.75
 SPIKE_WEIGHT_ALPHA = 2.0
-
-
-def spike_threshold(y_train: pd.Series) -> float:
-    return float(y_train.quantile(SPIKE_QUANTILE))
 
 
 def sample_weights(y: pd.Series, threshold: float, alpha: float = SPIKE_WEIGHT_ALPHA) -> np.ndarray:

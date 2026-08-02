@@ -1,7 +1,15 @@
 # A 24-hour guideline inside an hourly forecast
 
 A note on something that surfaced while building the exceedance detection, and that the
-current implementation quietly gets wrong.
+current implementation still partly gets wrong.
+
+> **Status update.** The detection threshold has since moved from 15 to 35 µg/m³, which was
+> the open question at the end of this note. That change is now implemented and measured;
+> see [What moving to 35 actually bought](#what-moving-to-35-actually-bought) below. Of the
+> three objections raised here, one (inflated base rate) is materially reduced and two
+> (averaging-window mismatch, diurnal bias) are untouched. The note is kept in its original
+> form, with the resolution appended, because the reasoning is what makes the result
+> readable.
 
 ## The mismatch
 
@@ -104,28 +112,101 @@ And is 15 µg/m³ even the interesting threshold for hourly work? The US AQI
 may be the more honest target for an hourly detector. Worth measuring both rather than
 arguing about it.
 
+## What moving to 35 actually bought
+
+This last question has now been answered by measurement rather than argument. 35 µg/m³ is
+the primary detection threshold; 15 is still reported alongside it as an evaluation-only
+readout on the same frozen predictions, so the two are directly comparable.
+
+**The base-rate objection is materially reduced.** Exceedance falls from ~13% of training
+hours to ~2.0%. The detection score is no longer flattered by an event that happens all the
+time — which is what the third objection above was about.
+
+**The other two objections stand unchanged.** The US AQI band is *also* defined on a 24-hour
+average (35.5–55.4 µg/m³ under the 2024 revision, of which 35.0 here is a round-number
+stand-in), so the averaging-window mismatch is untouched. The diurnal-bias argument arguably
+gets *sharper*, not weaker: a rarer threshold is crossed almost exclusively during
+compressed-boundary-layer hours, so the detector's dependence on time-of-day increases. The
+hour-specific threshold above simply becomes $\tau_h = 35 \cdot r_h$.
+
+**A cost that had to be paid to measure this at all.** Validating on 2024-H1 gave only 65
+hours above 35 out of 21,316 — 0.30%. An F-beta estimated over 65 positives is noise, and the
+failure would have been silent, since `exceedance_scores` returns 0.0 rather than raising.
+Validation was therefore extended backwards to 2023-07-01, picking up the 546 exceedances of
+2023-H2 for 611 in total. Training data shrank 25%.
+
+The test window was deliberately **not** moved. Extending it backwards over 2024-H1 would have
+produced a larger test set, but 2024-H1 was the validation window under the previous split —
+the feature set and search ranges this project inherited were chosen with it visible. Keeping
+it in validation preserves both the honesty of "never seen during hyperparameter search" and
+direct comparability with every number published before the change.
+
+That comparability is worth what it cost. On the identical test window, at the identical
+persistence baseline (RMSE 4.45 / 7.27 / 9.09, unchanged by construction), 25% less training
+data cost +0.03 RMSE at 4h and −0.01 at 12h. The reduction was essentially free where it
+matters.
+
+**The result.** Detection F-beta (β=2) on the test split, model versus persistence baseline:
+
+| horizon | F₂ @35 model | F₂ @35 persistence | F₂ @15 model | F₂ @15 persistence |
+|---|---|---|---|---|
+| 1h | 0.690 | **0.758** | 0.743 | **0.755** |
+| 4h | **0.531** | 0.496 | **0.669** | 0.618 |
+| 12h | **0.328** | 0.288 | **0.611** | 0.506 |
+
+The absolute scores at 35 are much lower than at 15, exactly as predicted: rarer events are
+harder, and the numbers at 15 were partly inflated by a base rate of ~13% of hours. What does
+not change is the sign — the model beats persistence at 4h and 12h under both thresholds, and
+loses at 1h under both. So the deflation is real, and it is uniform: it did not selectively
+remove the model's advantage.
+
+That last point is not something this note originally expected, and it was nearly recorded the
+other way. An earlier version of this migration pooled 2024-H1 into the test set; there, the
+4h comparison read as a narrow *loss* (0.458 vs 0.464), and it was written up as the model
+having lost half its evidence against the clock objection. It had not. 2024-H1 carries a 0.30%
+base rate, where both model and baseline score near-nothing, and pooling it dragged the
+aggregate down. A metric averaged across two regimes that differ by 8x in base rate mostly
+reports which regime dominates the sample.
+
+## Open questions after this change
+
+Moving the threshold did not touch the averaging window, so the daily-mean reformulation
+described above is still the substantive next step, and the calendar-only ablation control is
+still unrun. Both matter more now, not less: with only one horizon still beating persistence
+on detection, there is less margin absorbing an unattributed clock effect.
+
 ## A consequence already visible in the ablation
 
 This isn't only a future concern — it contaminates a result already measured. In the feature
-ablation, the groups that raise exceedance recall at the 12-hour horizon (wavelet, seasonal,
-precipitation) are precisely the ones that best represent the diurnal and annual cycles. The
-FFT diurnal band energy, the day-of-year harmonics, and a climatological anomaly indexed by
-(site, month, hour) are all, among other things, high-resolution clocks.
+ablation, the groups that raise exceedance recall (precipitation at 1h and 4h, wavelet at 12h)
+are among those that best represent the diurnal and annual cycles. The FFT diurnal band
+energy, the day-of-year harmonics, and a climatological anomaly indexed by (site, month, hour)
+are all, among other things, high-resolution clocks.
 
 If the exceedance label is partly a function of what hour it is, then a better clock buys
 recall without buying any forecasting skill. The ablation as run cannot separate the two.
 
-Two things argue against the strong version of that objection: the `base` combination already
-carries cyclical hour/day-of-week/month encodings, so every reported delta is incremental over
-a clock-aware baseline; and the model beats the persistence baseline on exceedance F-beta at
-4h (0.674 vs 0.618) and 12h (0.608 vs 0.506), which a pure clock could not do, since
-persistence carries information about the air and none about the hour.
+Two things argue against the strong version of that objection, and both survive the move to
+35 µg/m³: the `base` combination already carries cyclical hour/day-of-week/month encodings, so
+every reported delta is incremental over a clock-aware baseline; and the model beats the
+persistence baseline on exceedance F-beta at 4h (0.531 vs 0.496) and 12h (0.328 vs 0.288),
+which a pure clock could not do, since persistence carries information about the air and none
+about the hour. At 15 µg/m³ the same two wins held (0.669 vs 0.618 and 0.611 vs 0.506), close
+to what was published before the migration.
 
 What would settle it is a **calendar-only detector** — hour, day-of-week, month and site, with
-no pollution history whatsoever — added as another ablation combination. If its 12h recall
-approaches the 0.685 that the wavelet group reaches, the gain is clock knowledge. That control
-has not been run, and until it is, the 12h detection improvements should be read as
-unattributed. It is cheap to add and is the first thing to do when this study is picked up.
+no pollution history whatsoever — added as another ablation combination. That control has
+still not been run, and until it is, the 12h detection improvements should be read as
+unattributed. It is cheap to add and remains the first thing to do when this study is picked
+up — more so now, since a rarer threshold makes exceedance more concentrated in specific hours
+of the day, not less.
+
+One caution the reruns made concrete: ablation rankings are properties of a
+(threshold, split) pair, not of the features. Reran at 35 against a test set that wrongly
+absorbed 2024-H1, the 63-feature combination appeared to win RMSE at 4h, overturning the
+published "wins RMSE at no horizon". Rerun against the correct test window, that claim holds
+again — and the full set is now the *worst* combination at 1h on every metric. The apparent
+reversal was the test window, not the features.
 
 ## Cost of acting on this
 
@@ -133,3 +214,13 @@ Changing the target definition touches `metrics.py`, the Optuna objective, and e
 number currently published in `models/metrics.json`. It means retraining and rewriting the
 results section. It does not affect the feature pipeline or the causality guarantees —
 that part stands either way.
+
+**Correction, written after actually doing it:** the last sentence was wrong. Moving the
+threshold alone would not have touched the feature pipeline, but it could not be measured
+without also moving the split — and `features.py` imports `splits.TRAIN_END` to fit the
+(site, month, hour) climatology on pre-cutoff rows only. So `data/processed/features.parquet`
+had to be rebuilt too, and skipping that rebuild would have leaked the new validation window
+into `seas_climatology` and its two derived anomaly columns, silently, with no error and a
+*better*-looking validation score. The causality guarantees held, but only because the
+rebuild was run; the guarantee is conditional on a step this note originally did not know
+about. Anything that changes `TRAIN_END` must re-run `scripts/build_features.py`.
