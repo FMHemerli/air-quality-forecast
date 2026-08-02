@@ -55,6 +55,11 @@ def extract_metrics(n_features: int, result: dict) -> dict:
     exceedance = report["exceedance"]
     return {
         "n_features": n_features,
+        # Carried through to the CSV because ablation_report.csv is gitignored and so has no
+        # history: without this column, a run at 35 µg/m3 is indistinguishable from an older
+        # one at 15 after the fact. Deliberately not in METRIC_COLUMNS, which drives the
+        # delta-vs-base arrows and would render a meaningless 0.0000 delta for a constant.
+        "threshold_ugm3": report["threshold_ugm3"],
         "overall_rmse": report["overall_rmse"],
         "overall_mae": report["overall_mae"],
         "below_threshold_mae": report["below_threshold_mae"],
@@ -139,7 +144,7 @@ def main() -> None:
     print(f"[saved] {json_path}")
 
     csv_path = config.PROCESSED_DIR / "ablation_report.csv"
-    fieldnames = ["horizon_h", "combination", "groups", "n_features"] + [
+    fieldnames = ["horizon_h", "combination", "groups", "n_features", "threshold_ugm3"] + [
         col for col, _ in METRIC_COLUMNS
     ]
     with open(csv_path, "w", newline="") as f:
