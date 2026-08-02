@@ -9,10 +9,11 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 Short-horizon (1h / 4h / 12h) PM2.5 particulate-matter forecasting for five California air
-quality monitoring sites, built as an independent portfolio project on public data.
+quality monitoring sites, built as an independent portfolio project.
 
-Built entirely from scratch on public EPA data — no code, data, configuration, or
-methodology from any client engagement. See [Data & provenance](#data--provenance).
+Two public datasets: hourly PM2.5 from the EPA Air Quality System and hourly precipitation
+and relative humidity from Open-Meteo ERA5 reanalysis, both fetched by scripts in this
+repository. See [Data & provenance](#data--provenance).
 
 **Live demo**: https://fmhemerli-air-quality-forecast.streamlit.app/
 
@@ -235,11 +236,36 @@ Full reasoning, including the open questions, in
 
 ## Data & provenance
 
-Data source: [EPA Air Quality System (AQS)](https://aqs.epa.gov/aqsweb/airdata/download_files.html),
-U.S. government public domain data. This project, including all code, feature engineering,
-modeling choices, and thresholds, was written independently against this public dataset.
-It does not reuse any code, data, schema, naming, or calibrated constant from any private or
-client codebase.
+Two public datasets, each downloaded by a script in this repository, so the whole pipeline
+reproduces from nothing but a clone:
+
+- **PM2.5** — [EPA Air Quality System (AQS)](https://aqs.epa.gov/aqsweb/airdata/download_files.html)
+  hourly mass concentration (parameter 88101), 2022–2024, U.S. government public domain.
+  `scripts/download_data.py` pulls the pre-generated national annual files (no API key),
+  filters to California, and discards the national CSV.
+- **Weather** — [Open-Meteo historical weather API](https://open-meteo.com/en/docs/historical-weather-api),
+  serving ERA5 reanalysis (Copernicus Climate Change Service). `scripts/download_weather.py`
+  fetches hourly precipitation and relative humidity at each monitor's own latitude/longitude,
+  taken from the EPA rows themselves so the two series line up on location as well as time.
+
+The methods, and why each was chosen:
+
+- **Gradient-boosted trees (XGBoost), one model per horizon.** The predictors are tabular,
+  heterogeneous, and interact non-linearly; boosted trees handle that without scaling or
+  imputation assumptions. Separate models per horizon because 1h is nearly persistence and
+  12h is nearly climatology — one shared model would have to compromise between them.
+- **Causal feature construction.** Every lag, rolling, spectral, wavelet and denoising
+  feature reads only from t−1 backwards, and the seasonal climatology is estimated solely
+  from pre-cutoff rows. Verified by recomputing on truncated series (max absolute
+  difference 0.0), because a leak here would inflate every downstream number silently.
+- **Multi-objective Optuna (TPE) instead of a weighted sum.** Below-threshold MAE (µg/m³)
+  and exceedance F-beta (dimensionless) are incommensurable; adding them would hide an
+  arbitrary exchange rate inside a hyperparameter. The Pareto front keeps the trade-off
+  explicit and the selection rule visible.
+- **Time-based split, never random.** Adjacent hours are strongly correlated, so a random
+  split leaks the future into training and reports a score that cannot occur in deployment.
+- **Persistence baseline on every metric.** "The current reading holds" is the forecast a
+  useful model has to beat; where it doesn't — 1h here — the README says so.
 
 ## License
 

@@ -147,8 +147,9 @@ def validate_metrics(metrics: dict) -> list[str]:
 def main() -> None:
     st.title("PM2.5 Forecast — California EPA AQS Monitoring Sites")
     st.caption(
-        "Portfolio project. Data: EPA Air Quality System (AQS) hourly PM2.5, public domain. "
-        "Not affiliated with, and does not use any code, data, or methods from, any client project."
+        "Portfolio project. Data: EPA Air Quality System (AQS) hourly PM2.5 (public domain) "
+        "and Open-Meteo ERA5 reanalysis weather. Model: one XGBoost regressor per horizon, "
+        "tuned with multi-objective Optuna on a time-ordered split."
     )
 
     df = load_featurized()
