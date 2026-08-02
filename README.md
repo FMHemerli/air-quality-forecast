@@ -234,6 +234,63 @@ and that limit should be measured rather than ignored.
 Full reasoning, including the open questions, in
 [`docs/24h-guideline-hourly-forecast.md`](docs/24h-guideline-hourly-forecast.md).
 
+### A second mismatch: a noisy point forecast against a hard threshold
+
+The problem above is about the label. There is a second one on the prediction side, found
+while working out what the 5.0 µg/m³ detection limit costs.
+
+Exceedance is declared when `pred > 35`, so one number serves both as the concentration that
+matters for health and as the decision boundary on a noisy point forecast. Those are different
+quantities. Because the model regresses toward the mean it undershoots real spikes by 9–21
+µg/m³ depending on horizon, which makes "the forecast itself must reach 35" stricter than the
+health question actually asks. Picking a decision threshold `c*` on the validation split
+instead transfers to test at every horizon:
+
+| horizon | c* | F₂ at `pred > 35` | F₂ at `pred > c*` | persistence |
+|---|---|---|---|---|
+| 1h | 28.5 | 0.659 | 0.720 | 0.758 |
+| 4h | 26.0 | 0.504 | 0.611 | 0.496 |
+| 12h | 27.0 | 0.439 | 0.599 | 0.288 |
+
+Not implemented, for two reasons. It buys recall with precision — at 4h precision falls from
+0.574 to 0.348, roughly two false alarms per real one — and while β=2 asks for exactly that
+trade, how far to take it is an operational decision that belongs in front of whoever runs the
+alarm rather than inside a tuned constant. And these numbers come from a model fitted on train
+only, so that `c*` could be chosen on validation without contamination; the deployed models are
+refit on train+val and start from a different place (12h F₂ 0.439 here against 0.328 published),
+so the size of the gain would have to be reconfirmed inside the real pipeline.
+
+Three other routes against the measurement floor were tested and abandoned:
+
+- **Dropping sub-MDL rows from `below_threshold_mae`** makes it worse, not better (1h:
+  3.165 → 3.376). Those rows are 28.7% of the calm-regime sample but only 24.0% of its error —
+  they are easy, not noisy, so removing them raises the average.
+- **Isotonic recalibration** (model on train, calibrator on validation) improves MAE and
+  destroys detection: 4h F₂ falls 0.504 → 0.350, because the fitted map sends 35 → 32.0 and
+  fewer forecasts cross the line. It barely moves the calm-regime bias it was meant to fix,
+  since a monotone map on predicted value cannot separate "predicted 4, truth 1" from
+  "predicted 4, truth 4".
+- **`reg:gamma`**, which in principle matches the heteroscedasticity better, collapses
+  detection outright (12h F₂ 0.439 → 0.032): the log link shrinks high predictions toward the
+  conditional geometric mean and the model stops crossing 35. The measured heteroscedasticity
+  is sub-linear anyway — residual spread grows 4.5× across a 35× range in level — so gamma
+  over-corrects. It is also not directly applicable, since 5.22% of targets are ≤ 0.
+
+All three fail the same way: optimizing error on the physical scale is blind to 35 being a
+decision boundary.
+
+One finding is recorded here because it was nearly written up backwards. The model looks like
+it over-predicts badly in the calm regime, by +2.4 to +4.2 µg/m³ below the detection limit.
+Most of that is a conditioning artifact, not a defect: selecting rows where the *measured*
+value is low preferentially selects downward noise, so any unbiased predictor shows positive
+bias there. The persistence baseline shows it too (+0.65 / +1.96 / +3.17). Only the 1h excess
+over persistence is real, and it belongs to a different problem than the detection limit.
+
+Aggregating to 24-hour means would dissolve all of this rather than work around it: noise
+averages down, the negatives cancel by design, and daily means sit above the detection limit.
+That it is also the fix for the averaging-window mismatch above is not a coincidence — both
+problems come from reading an hourly instrument as though it answered a daily question.
+
 ## Data & provenance
 
 Two public datasets, each downloaded by a script in this repository, so the whole pipeline
@@ -247,6 +304,39 @@ reproduces from nothing but a clone:
   serving ERA5 reanalysis (Copernicus Climate Change Service). `scripts/download_weather.py`
   fetches hourly precipitation and relative humidity at each monitor's own latitude/longitude,
   taken from the EPA rows themselves so the two series line up on location as well as time.
+
+### What the instrument actually reports
+
+Every site runs a Met One beta-attenuation monitor (BAM-1020 on 127,573 of 129,151 rows,
+BAM-1022 on the rest). That shows up in the data in three ways worth knowing before trusting
+any value below about 5 µg/m³.
+
+**Negative concentrations, 2.79% of readings, down to −5.1 µg/m³.** There is no negative mass.
+A BAM derives concentration from the *difference* between two beta-attenuation counts taken
+before and after drawing air through a filter tape; when the real loading is near zero, that
+difference is dominated by the counting statistics of radioactive decay and by tape response
+to humidity. The negative value is the error term of a difference estimator, not a
+concentration. Three independent checks say noise rather than assume it: the reported method
+detection limit is 5.0 µg/m³ on every row and 99.1% of the negatives are smaller than that in
+magnitude; the negatives concentrate at the *cleanest* sites (Ventura, median 5.0, is 6.42%
+negative — Fresno, median 10.0, is 1.42%), which is what noise around zero predicts and a
+physical process would not; and the noise scale estimated separately from local curvature is
+σ ≈ 1.46 µg/m³, putting the detection limit at 3.4σ, about where the usual ~3σ convention
+puts it.
+
+They are deliberately not clipped to zero. Truncating negative noise while keeping positive
+noise biases every average upward, and the quantity the standard regulates is a 24-hour mean —
+the negatives have to survive in order to cancel the positives. EPA publishes them for that
+reason, and this project keeps them.
+
+**32.2% of all readings fall below the 5.0 µg/m³ detection limit**, and so does 28.7% of the
+calm-regime sample that `below_threshold_mae` is computed over. That is a ceiling on
+achievable accuracy in the calm regime, not something modeling can recover. What follows from
+it is in [Next steps](#next-steps--a-problem-worth-thinking-about).
+
+**Reporting resolution is not uniform.** Four of the five sites report whole µg/m³; only
+Fresno reports tenths, and it switched partway through 2022. Nothing in the pipeline depends
+on this, but the same feature carries different quantization depending on the site.
 
 The methods, and why each was chosen:
 
