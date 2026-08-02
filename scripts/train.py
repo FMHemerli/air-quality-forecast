@@ -181,6 +181,11 @@ def tune_and_train(
     # Evaluation-only readouts at the secondary thresholds. Same frozen predictions, no
     # refit -- these describe how the model happens to score against another standard, and
     # must not be read as targets it was optimized for.
+    #
+    # The primary threshold is excluded even if it is also listed as a secondary: the
+    # dashboard keys its threshold views by value, so a duplicate would let the
+    # evaluation-only entry shadow the primary one and label the training target
+    # "evaluation only" -- the exact claim the split between the two exists to keep honest.
     secondary_threshold_reports = [
         {
             "threshold_ugm3": float(t),
@@ -190,6 +195,7 @@ def tune_and_train(
             ),
         }
         for t in config.SECONDARY_HEALTH_THRESHOLDS_UGM3
+        if float(t) != float(detection_threshold)
     ]
 
     # Number of validation exceedances the Optuna objective actually had to work with. An

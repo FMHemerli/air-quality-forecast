@@ -52,9 +52,14 @@ def threshold_views(hm: dict) -> list[dict]:
     post-hoc readouts on the same frozen predictions and are labelled as such so nobody reads
     a secondary line as a training target.
 
-    Malformed or missing secondaries are skipped silently rather than raising: a cosmetic
-    comparison view is not worth taking the live demo down for, and this is what lets an
-    older metrics.json degrade to a single-option selector.
+    Malformed, duplicate, or missing secondaries are skipped silently rather than raising: a
+    cosmetic comparison view is not worth taking the live demo down for, and this is what lets
+    an older metrics.json degrade to a single-option selector.
+
+    Duplicates matter more than they look. Callers key these views by threshold value, so a
+    secondary repeating the primary would shadow it and present the training target as
+    "evaluation only". `scripts/train.py` already refuses to write that, but this function
+    also reads metrics.json files it did not produce, so it does not rely on the writer.
     """
     primary = float(hm["health_threshold_ugm3"])
     views = [{
@@ -63,6 +68,7 @@ def threshold_views(hm: dict) -> list[dict]:
         "model": hm["model_threshold_report"],
         "baseline": hm.get("baseline_persistence_threshold_report") or {},
     }]
+    seen = {primary}
 
     for entry in hm.get("secondary_threshold_reports") or []:
         if not isinstance(entry, dict) or not isinstance(entry.get("model"), dict):
@@ -71,6 +77,9 @@ def threshold_views(hm: dict) -> list[dict]:
             threshold = float(entry["threshold_ugm3"])
         except (KeyError, TypeError, ValueError):
             continue
+        if threshold in seen:
+            continue
+        seen.add(threshold)
         views.append({
             "threshold": threshold,
             "is_primary": False,
